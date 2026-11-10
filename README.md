@@ -23,9 +23,10 @@ go install github.com/rynf1t/agent-radar/cmd/radar@latest
 radar skill install   # teach Claude Code to use it
 ```
 
-radar builds against [craftkit](https://github.com/rynf1t/craftkit). While
-both live side by side in `~/Projects`, `go.mod` points at the local copy with
-a `replace`, so build from a checkout with `go install ./cmd/radar`.
+This needs Go 1.26 or later. radar builds on
+[craftkit](https://github.com/rynf1t/craftkit). To work on both at once, add
+`replace github.com/rynf1t/craftkit => ../craftkit` to `go.mod` and keep it
+out of commits.
 
 ## Quick start
 
