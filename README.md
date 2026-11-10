@@ -68,6 +68,32 @@ Then run `rex config reload`. Cmd+Shift+U floats the radar over whatever
 you're looking at. Enter jumps to an agent and closes it. Esc or Cmd+Shift+U
 closes it and puts focus back where it was.
 
+### A toast when an agent elsewhere needs you
+
+Rex sends a macOS notification when an agent needs you, but only while Rex is
+in the background. While you work in one session, an agent in another can
+wait unseen. `radar watch` fills that gap:
+
+```sh
+radar watch
+```
+
+When an agent in a session you aren't looking at becomes blocked, fails or
+finishes, a small card appears in the top right of the tab you're on. It
+doesn't take focus. Click it to jump to the agent. It goes away after 30
+seconds, or as soon as the agent moves on or you look at it.
+`--states blocked,error` leaves out done.
+
+To run it at login:
+
+```sh
+radar watch --plist > ~/Library/LaunchAgents/io.github.rynf1t.radar.watch.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.rynf1t.radar.watch.plist
+```
+
+It waits for Rex and never starts it. It logs to
+`~/Library/Logs/radar-watch.log`, and only one runs at a time.
+
 ## What it shows
 
 Agents are grouped by session. Sessions and agents are ordered by urgency,
@@ -98,6 +124,7 @@ radar hide
 radar ls [--json] [--state STATE]
 radar focus [TARGET]
 radar view [--popup [--back BLOCK]]
+radar watch [--states blocked,error,done] [--plist]
 radar render -o FILE.png [--width PX] [--height PX] [--theme light|dark]
 radar demo STATE [--kind KIND] [--msg TEXT] | radar demo cycle
 radar skill install|show|remove [--dir DIR] [--dry-run] [--force]
@@ -127,6 +154,9 @@ ambiguous, 4 Rex unreachable, 130 interrupted.
   already looking at stays unseen until the app shows that pane again.
 - **One machine.** radar reads the local Rex server. Agents on other hosts
   don't appear yet.
+- **Toasts need to know which session you're on.** Rex doesn't publish that,
+  so `radar watch` reads it from the Rex app's preferences. A Rex update could
+  move it, and then the watcher logs why it skipped a toast.
 - **Titles and folders refresh every 20 seconds.** Status changes arrive
   straight away from the event stream.
 
@@ -159,7 +189,8 @@ radar demo blocked --kind question --msg "Ship it?"
   Display order is the order `radar focus N` uses.
 - `internal/view` is the pane: `live.go` keeps state from one scan plus the
   event stream, `render.go` draws a frame, `view.go` runs the loop,
-  `motion.go` holds every duration.
+  `motion.go` holds every duration. `watch.go` decides when to toast and
+  where. A toast is the same viewer run with `--toast BLOCK`.
 - `internal/pane` makes `radar show` idempotent. The pane's block ID is
   stored under `$XDG_STATE_HOME/agent-radar`, keyed on `REX_BLOCK`, behind a
   file lock.

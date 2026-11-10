@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/xml"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,5 +94,23 @@ func TestSkillInstall(t *testing.T) {
 	out, _ = runArgs(t, "skill", "show")
 	if !strings.HasPrefix(out, "---\nname: radar") || !strings.Contains(out, "Installed by \"radar skill install\"") {
 		t.Errorf("show: %q", out[:min(80, len(out))])
+	}
+}
+
+func TestWatchPlist(t *testing.T) {
+	out, code := runArgs(t, "watch", "--plist", "--states", "blocked")
+	if code != cliout.OK {
+		t.Skipf("exit %d (rex not on PATH?)", code)
+	}
+	if err := xml.Unmarshal([]byte(out), new(struct{})); err != nil {
+		t.Errorf("not XML: %v", err)
+	}
+	for _, want := range []string{watchLabel, "<string>watch</string>", "<string>--states</string>", "<string>blocked</string>"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("plist lacks %q", want)
+		}
+	}
+	if _, code := runArgs(t, "watch", "--states", "working"); code != cliout.Usage {
+		t.Errorf("--states working: exit %d, want %d", code, cliout.Usage)
 	}
 }

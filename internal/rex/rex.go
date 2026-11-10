@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,9 @@ type Client struct {
 	Bin     string        // the rex executable, "rex" by default
 	Server  string        // a host label for -S, empty for this machine
 	Timeout time.Duration // per call
+	// NoStart stops the rex CLI from starting a server when none is
+	// running, for a watcher that must not open Rex by itself.
+	NoStart bool
 }
 
 // New returns a client for the local server.
@@ -45,10 +49,14 @@ func (c *Client) Available() error {
 func InRex() bool { return os.Getenv("REX_SERVER") != "" }
 
 func (c *Client) args(rest ...string) []string {
+	var pre []string
 	if c.Server != "" {
-		return append([]string{"-S", c.Server}, rest...)
+		pre = append(pre, "-S", c.Server)
 	}
-	return rest
+	if c.NoStart {
+		pre = append(pre, "--autostart=false")
+	}
+	return append(pre, rest...)
 }
 
 // Run runs rex with args and returns stdout. A failure carries rex's stderr.
@@ -214,22 +222,82 @@ func (c *Client) Title(ctx context.Context, sessionID, blockID string) (string, 
 	return out.Title, err
 }
 
-// Viewed is the last time an app showed the pane: the newest size a
-// client asked for. It is zero when no client ever has.
-func (c *Client) Viewed(ctx context.Context, sessionID, blockID string) (time.Time, error) {
-	var out struct {
-		Desired []struct {
-			UpdatedAt time.Time `json:"updated_at"`
-		} `json:"desired"`
-	}
-	err := c.BlockCall(ctx, sessionID, blockID, "size", &out)
+// Size is a terminal's grid and the sizes clients asked it for.
+type Size struct {
+	Columns    int `json:"columns"`
+	Rows       int `json:"rows"`
+	CellWidth  int `json:"cell_width_px"`
+	CellHeight int `json:"cell_height_px"`
+	Desired    []struct {
+		UpdatedAt time.Time `json:"updated_at"`
+	} `json:"desired"`
+}
+
+// Viewed is the last time an app showed the pane: the newest size a client
+// asked for. It is zero when no client ever has.
+func (s Size) Viewed() time.Time {
 	var last time.Time
-	for _, d := range out.Desired {
+	for _, d := range s.Desired {
 		if d.UpdatedAt.After(last) {
 			last = d.UpdatedAt
 		}
 	}
-	return last, err
+	return last
+}
+
+func (c *Client) Size(ctx context.Context, sessionID, blockID string) (Size, error) {
+	var out Size
+	err := c.BlockCall(ctx, sessionID, blockID, "size", &out)
+	return out, err
+}
+
+// NewLayer opens a terminal running command in a floating layer of a
+// window, at bounds given as [x, y, w, h] fractions of the window, without
+// taking focus. It returns the new block's ID.
+func (c *Client) NewLayer(ctx context.Context, sessionID, windowID string, bounds [4]float64, label string, command []string) (string, error) {
+	args := map[string]any{
+		"session_id": sessionID, "window_id": windowID, "bounds": bounds, "focus": false,
+		"layout": map[string]any{"block": map[string]any{
+			"flavor": "com.superlogical.terminal.shell", "label": label,
+			"options": map[string]any{"command": command, "shell": "none"},
+		}},
+	}
+	var out struct {
+		BlockIDs []string `json:"block_ids"`
+	}
+	if err := c.Call(ctx, "session.new_layer", args, &out); err != nil {
+		return "", err
+	}
+	if len(out.BlockIDs) == 0 {
+		return "", fmt.Errorf("session.new_layer made no block")
+	}
+	return out.BlockIDs[0], nil
+}
+
+// ShownSession is the session the Rex app on this Mac shows, which the app
+// keeps in its preferences. It fails when the app has never shown one.
+func ShownSession(ctx context.Context) (string, error) {
+	prefs, err := exec.CommandContext(ctx, "defaults", "export", "com.superlogical.rex", "-").Output()
+	if err != nil {
+		return "", fmt.Errorf("reading the Rex app's preferences: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, "plutil", "-extract", `Workspace\.lastFocusedSession`, "raw", "-o", "-", "-")
+	cmd.Stdin = bytes.NewReader(prefs)
+	raw, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("the Rex app hasn't recorded a session")
+	}
+	data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return "", err
+	}
+	var v struct {
+		SessionID string `json:"sessionID"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil || v.SessionID == "" {
+		return "", fmt.Errorf("the Rex app's last session is unreadable")
+	}
+	return v.SessionID, nil
 }
 
 // Focus focuses a block and makes its window active in its session.

@@ -33,6 +33,11 @@ again does nothing and prints the same pane ID, so it is safe on every turn.
 The user may also have Cmd+Shift+U, which floats the radar over any session
 and closes it after a jump. That key is theirs. Don't open the float for them.
 
+`radar watch` shows a toast in the user's current tab when an agent in
+another session becomes blocked, fails or finishes. It usually runs at login
+as a LaunchAgent. If the user asks whether toasts are on, check with
+`pgrep -fl "radar watch"`. Don't start or stop it unless they ask.
+
 In the pane, the user moves with the arrow keys or `j` and `k`, presses enter
 to jump to that agent, `/` to filter and `q` to quit.
 

@@ -327,6 +327,23 @@ func render(f frame) *image.RGBA {
 	return img
 }
 
+// toastH is a toast's height in points: the session, then one row.
+const toastH = padTop + headerH + rowH
+
+// renderToast draws one agent as a notification card: its session's name
+// above its row, the way the list shows it.
+func renderToast(f frame, a radar.Agent) *image.RGBA {
+	img := image.NewRGBA(image.Rect(0, 0, f.widthPx, f.heightPx))
+	if f.opaque {
+		draw.Draw(img, img.Bounds(), image.NewUniform(f.pal.bg), image.Point{}, draw.Src)
+	}
+	c := &canvas{img: img, scale: f.scale}
+	w := float64(f.widthPx) / f.scale
+	c.text(padX, padTop+11, sizeHeader, a.Session, f.pal.header, w-2*padX)
+	c.row(f, a, padTop+headerH-4, w, 1)
+	return img
+}
+
 // fadeEdge is how far the list fades out at an edge it can scroll past.
 const fadeEdge = 28.0
 

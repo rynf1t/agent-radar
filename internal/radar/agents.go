@@ -333,10 +333,10 @@ func Scan(ctx context.Context, c *rex.Client) ([]*Pane, error) {
 			mu.Unlock()
 		}))
 		wg.Go(run(func() {
-			t, err := c.Viewed(ctx, p.SessionID, p.BlockID)
+			sz, err := c.Size(ctx, p.SessionID, p.BlockID)
 			mu.Lock()
 			if err == nil {
-				p.Viewed = t
+				p.Viewed = sz.Viewed()
 			}
 			mu.Unlock()
 		}))

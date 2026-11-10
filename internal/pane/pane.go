@@ -135,3 +135,22 @@ func Hide(key string) error {
 	}
 	return nil
 }
+
+// Single takes the lock called name for as long as this process runs, so
+// only one of something runs at a time. It fails when another process
+// holds it.
+func Single(name string) (release func(), err error) {
+	p := filepath.Join(StateDir(), name+".lock")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("another radar %s is already running", name)
+	}
+	return func() { f.Close() }, nil
+}

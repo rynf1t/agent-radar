@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"image"
 	"image/png"
 	"math"
 	"os"
@@ -29,8 +30,14 @@ import (
 type Options struct {
 	Theme string // auto follows the terminal. light or dark pin a palette.
 	Popup bool   // a glance-and-go float: esc closes it, and so does a jump
-	Back  string // the block a popup focuses again on close, unless it jumped within its session
+	Toast string // show only this block's agent as a notification card
+	Back  string // the block a popup or a clicked toast focuses again on close, unless it jumped within its session
 }
+
+// toastFor is how long a toast stays when nobody touches it.
+const toastFor = 30 * time.Second
+
+func (o Options) closesOnJump() bool { return o.Popup || o.Toast != "" }
 
 type winSize struct{ cols, rows, xpix, ypix int }
 
@@ -117,12 +124,13 @@ func Run(ctx context.Context, c *rex.Client, opt Options) (err error) {
 
 	// Rex picks some other pane when a float closes, so a popup hands focus
 	// back to the pane it was opened over, unless it jumped within its own
-	// session.
+	// session. A toast opens without focus, so it only does this once
+	// touched.
 	home := os.Getenv("REX_SESSION")
-	jumpedHome := false
-	if opt.Popup && opt.Back != "" {
+	jumpedHome, touched := false, opt.Popup
+	if opt.closesOnJump() && opt.Back != "" {
 		defer func() {
-			if !jumpedHome {
+			if touched && !jumpedHome {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
 				c.Focus(ctx, home, opt.Back)
@@ -252,6 +260,12 @@ func Run(ctx context.Context, c *rex.Client, opt Options) (err error) {
 		case i.focus != 0:
 			v.focused = i.focus > 0
 			v.rebuildSel(now)
+		case i.click != nil && opt.Toast != "":
+			touched = true
+			if shown := v.visible(); len(shown) == 1 {
+				jump(shown[0])
+			}
+			return false
 		case i.click != nil:
 			v.focused = true
 			if a, ok := v.agentAtCell(i.click.row); ok {
@@ -265,7 +279,7 @@ func Run(ctx context.Context, c *rex.Client, opt Options) (err error) {
 			v.query += oneLine(i.paste)
 			v.rebuild(now)
 		case i.key != keyNone && i.key != 0:
-			v.focused = true
+			v.focused, touched = true, true
 			quit, wantJump := v.key(i, now)
 			if quit {
 				return true
@@ -285,6 +299,27 @@ func Run(ctx context.Context, c *rex.Client, opt Options) (err error) {
 		}
 	}
 
+	// A toast leaves when its agent moves on: answered, looked at, closed.
+	var toastEnd <-chan time.Time
+	var toastState radar.State
+	if opt.Toast != "" {
+		toastEnd = time.After(toastFor)
+	}
+	toastOver := func() bool {
+		if opt.Toast == "" || !v.scanned {
+			return false
+		}
+		shown := v.visible()
+		if len(shown) == 0 {
+			return true
+		}
+		a := shown[0]
+		if toastState == "" {
+			toastState = a.Urgency()
+		}
+		return a.Urgency() != toastState
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -300,6 +335,9 @@ func Run(ctx context.Context, c *rex.Client, opt Options) (err error) {
 			// when something the view shows has changed.
 			now := time.Now()
 			v.agents, v.scanned, v.connected = lv.snapshot()
+			if toastOver() {
+				return nil
+			}
 			if sig := v.signature(now); sig != lastSig {
 				lastSig = sig
 				v.rebuild(now)
@@ -307,6 +345,8 @@ func Run(ctx context.Context, c *rex.Client, opt Options) (err error) {
 			}
 		case now := <-frames.C:
 			redraw(now)
+		case <-toastEnd:
+			return nil
 		case <-ages.C:
 			if sig := v.signature(time.Now()); sig != lastSig {
 				lastSig = sig
@@ -327,7 +367,7 @@ func Run(ctx context.Context, c *rex.Client, opt Options) (err error) {
 			v.rebuild(time.Now())
 			redraw(time.Now())
 		case err := <-focusDone:
-			if err == nil && opt.Popup {
+			if err == nil && opt.closesOnJump() {
 				jumpedHome = jumpTo.SessionID == home
 				return nil
 			}
@@ -393,6 +433,14 @@ func (v *viewer) repalette() bool {
 }
 
 func (v *viewer) visible() []radar.Agent {
+	if v.opt.Toast != "" {
+		for _, a := range v.agents {
+			if a.BlockID == v.opt.Toast {
+				return []radar.Agent{a}
+			}
+		}
+		return nil
+	}
 	if strings.TrimSpace(v.query) == "" {
 		return v.agents
 	}
@@ -560,7 +608,7 @@ func (v *viewer) key(i input, now time.Time) (quit, jump bool) {
 			v.closeFilter(now)
 			return false, false
 		}
-		return v.opt.Popup, false
+		return v.opt.closesOnJump(), false
 	}
 	if v.typing {
 		switch {
@@ -705,9 +753,38 @@ func (v *viewer) frameAt(now time.Time) frame {
 
 func (v *viewer) draw(w *bufio.Writer, now time.Time) {
 	f := v.frameAt(now)
+	var img *image.RGBA
+	if shown := v.visible(); v.opt.Toast != "" && len(shown) == 1 {
+		img = renderToast(f, shown[0])
+	} else {
+		img = render(f)
+	}
 	prev := v.imgID
 	v.imgID = v.imgID%(1<<20) + 1 // IDs wrap, and prev is always the image on screen
-	swap(w, render(f), prev, v.imgID, v.ws.cols, v.ws.rows)
+	swap(w, img, prev, v.imgID, v.ws.cols, v.ws.rows)
+}
+
+// RenderToastPNG draws a as the toast shows it, widthPx wide, to path.
+func RenderToastPNG(path string, a radar.Agent, widthPx int, scale float64, theme string) error {
+	th := fallbackDark
+	if theme == "light" {
+		th = fallbackLight
+	}
+	f := frame{pal: paletteFor(th), scale: scale, widthPx: widthPx, heightPx: int(math.Ceil(toastH * scale)),
+		opaque: true, now: time.Now()}
+	return writePNG(path, renderToast(f, a))
+}
+
+func writePNG(path string, img image.Image) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if err := png.Encode(file, img); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 // RenderPNG draws agents as the pane would show them, focused with the first
@@ -734,11 +811,5 @@ func RenderPNG(path string, agents []radar.Agent, widthPx, heightPx int, scale f
 	}
 	f := v.frameAt(time.Now())
 	f.widthPx, f.heightPx, f.opaque = widthPx, heightPx, true
-	img := render(f)
-	file, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	return png.Encode(file, img)
+	return writePNG(path, render(f))
 }

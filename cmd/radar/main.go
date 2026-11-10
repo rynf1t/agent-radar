@@ -8,9 +8,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -47,6 +50,11 @@ Usage:
                         --popup closes on esc and after a jump, and focuses
                         BLOCK again unless it jumped within this session.
                         The Rex plugin's Cmd+Shift+U float runs this.
+  radar watch [--states blocked,error,done] [--plist]
+                        while you're in Rex, show a toast in the session you
+                        are looking at when an agent elsewhere reaches one of
+                        these states. Click the toast to jump there. --plist
+                        prints a LaunchAgent that runs it at login.
   radar render -o FILE.png [--width PX] [--height PX] [--theme light|dark]
                         draw the viewer to a PNG, to see what the pane shows
   radar skill install [--dir DIR] [--dry-run] [--force]
@@ -62,7 +70,7 @@ Exit codes: 0 ok, 1 failure, 2 bad command line, 3 target not found or
 ambiguous, 4 Rex unreachable, 130 interrupted.
 `
 
-var version = "0.2.0"
+var version = "0.3.0"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -97,6 +105,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return pane.Hide(viewerKey())
 	case "view":
 		return cmdView(ctx, rest)
+	case "watch":
+		return cmdWatch(ctx, rest, stdout, stderr)
 	case "render":
 		return cmdRender(ctx, rest, stdout)
 	case "skill":
@@ -290,6 +300,7 @@ func cmdView(ctx context.Context, args []string) error {
 	fs := newFlags("view")
 	theme := fs.String("theme", "auto", "")
 	popup := fs.Bool("popup", false, "")
+	toast := fs.String("toast", "", "")
 	back := fs.String("back", "", "")
 	if err := parse(fs, args); err != nil {
 		return err
@@ -301,7 +312,93 @@ func cmdView(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	return view.Run(ctx, c, view.Options{Theme: *theme, Popup: *popup, Back: *back})
+	return view.Run(ctx, c, view.Options{Theme: *theme, Popup: *popup, Toast: *toast, Back: *back})
+}
+
+// watchLabel names the watcher's LaunchAgent.
+const watchLabel = "io.github.rynf1t.radar.watch"
+
+const watchPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>%s</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>%s</string>
+    <string>watch</string>%s
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>%s</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>%s</string>
+  <key>StandardErrorPath</key>
+  <string>%s</string>
+</dict>
+</plist>
+`
+
+func cmdWatch(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	fs := newFlags("watch")
+	states := fs.String("states", "blocked,error,done", "")
+	plist := fs.Bool("plist", false, "")
+	if err := parse(fs, args); err != nil {
+		return err
+	}
+	var want []radar.State
+	for _, s := range strings.Split(*states, ",") {
+		st := radar.State(strings.TrimSpace(s))
+		if st.Rank() == len(radar.States) || st == radar.Working || st == radar.Idle {
+			return cliout.Errorf(cliout.Usage, "--states takes blocked, error and done, not %q", s)
+		}
+		want = append(want, st)
+	}
+	bin, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if *plist {
+		return printPlist(stdout, bin, *states)
+	}
+	release, err := pane.Single("watch")
+	if err != nil {
+		return cliout.Wrap(cliout.Failure, err)
+	}
+	defer release()
+	// Rex may not be running yet, at login say. The watcher waits for it
+	// rather than failing or starting a server.
+	c := rex.New()
+	c.NoStart = true
+	fmt.Fprintf(stderr, "radar: watching for %s in sessions you aren't looking at. Press ctrl-c to stop.\n", strings.Join(strings.Split(*states, ","), ", "))
+	return view.Watch(ctx, c, view.WatchOptions{Bin: bin, States: want, Log: stderr})
+}
+
+// printPlist writes a LaunchAgent that runs the watcher at login. Its PATH
+// holds the rex this shell finds, since launchd starts with almost none.
+func printPlist(w io.Writer, bin, states string) error {
+	rexBin, err := exec.LookPath("rex")
+	if err != nil {
+		return cliout.Errorf(cliout.Unreachable, "rex is not on PATH, so the LaunchAgent couldn't find it either")
+	}
+	extra := ""
+	if states != "blocked,error,done" {
+		extra = "\n    <string>--states</string>\n    <string>" + html.EscapeString(states) + "</string>"
+	}
+	home, _ := os.UserHomeDir()
+	logPath := filepath.Join(home, "Library", "Logs", "radar-watch.log")
+	path := filepath.Dir(rexBin) + ":/usr/bin:/bin:/usr/sbin:/sbin"
+	_, err = fmt.Fprintf(w, watchPlist, watchLabel, html.EscapeString(bin), extra, html.EscapeString(path), logPath, logPath)
+	return err
 }
 
 func cmdRender(ctx context.Context, args []string, stdout io.Writer) error {
@@ -311,6 +408,7 @@ func cmdRender(ctx context.Context, args []string, stdout io.Writer) error {
 	height := fs.Int("height", 0, "")
 	theme := fs.String("theme", "dark", "")
 	scale := fs.Float64("scale", 2, "")
+	toast := fs.String("toast", "", "")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
@@ -327,6 +425,17 @@ func cmdRender(ctx context.Context, args []string, stdout io.Writer) error {
 	agents, err := scan(ctx, c)
 	if err != nil {
 		return err
+	}
+	if *toast != "" {
+		a, err := radar.Resolve(agents, *toast)
+		if err != nil {
+			return err
+		}
+		if err := view.RenderToastPNG(*out, a, *width, *scale, *theme); err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout, *out)
+		return nil
 	}
 	if err := view.RenderPNG(*out, agents, *width, *height, *scale, *theme); err != nil {
 		return err
