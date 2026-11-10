@@ -1,5 +1,8 @@
 # radar
 
+> **Archived.** radar is retired. Rex now covers this natively: Activity mode
+> (Cmd+. or the eye icon in the toolbar) lists every agent and what it needs.
+
 Every coding agent across your Rex sessions in one pane: who's working, who's
 blocked on you, and who finished something you haven't seen. Enter jumps
 there.
