@@ -16,7 +16,7 @@ States, most urgent first:
 |---|---|
 | `blocked` | Waiting on the user. `kind` is `permission`, `question` or `auth`, and `msg` says what. |
 | `error` | Failed and stopped. |
-| `done` | Finished, and the user has not looked yet. |
+| `done` | Finished. `seen` is true once the user has looked at the pane since. |
 | `working` | Busy on its own. |
 | `idle` | Waiting for the next instruction. |
 
@@ -30,6 +30,9 @@ This opens the radar in a pane beside yours without taking focus. Calling it
 again does nothing and prints the same pane ID, so it is safe on every turn.
 `radar hide` closes it. Leave it open unless the user asks you to close it.
 
+The user may also have Cmd+Shift+U, which floats the radar over any session
+and closes it after a jump. That key is theirs. Don't open the float for them.
+
 In the pane, the user moves with the arrow keys or `j` and `k`, presses enter
 to jump to that agent, `/` to filter and `q` to quit.
 
@@ -41,7 +44,7 @@ radar ls --state blocked --json # only the ones waiting on the user
 ```
 
 Each agent has `block_id`, `session`, `state`, `kind`, `title`, `msg`, `app`,
-`cwd` and `since`. Use the JSON, never the text table, in scripts.
+`cwd`, `since` and `seen`. Use the JSON, never the text table, in scripts.
 
 ## Jump to an agent
 
@@ -62,7 +65,8 @@ stays where it is, and `radar focus` says so and exits 1.
 
 - Report what you find in the user's words: "craft-web-style is waiting on a
   question about committing to main", not the raw JSON.
-- `done` means the user has not seen the result. Don't describe it as seen.
+- A `done` or `error` with `seen: false` is news to the user. With `seen: true`
+  they have already looked, so don't bring it up as new.
 - Exit codes: 0 ok, 1 failure, 2 bad command line, 3 target not found or
   ambiguous, 4 Rex unreachable.
 - Outside Rex, `radar show` fails with a message. `radar ls` still needs a

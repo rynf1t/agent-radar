@@ -151,3 +151,30 @@ func TestAgoAndMatches(t *testing.T) {
 		t.Error("Matches should match every word, ignoring case")
 	}
 }
+
+// A done or error the user has looked at since sorts and counts as idle.
+// A new report after the look makes it unseen again.
+func TestSeen(t *testing.T) {
+	done := pane("s", "done1", "done", 0, "")
+	done.Viewed = t0.Add(time.Minute)
+	stale := pane("s", "done2", "done", 2*time.Minute, "")
+	stale.Viewed = t0.Add(time.Minute)
+	work := pane("s", "work1", "working", 0, "")
+	work.Viewed = t0.Add(time.Hour)
+
+	agents := Agents([]*Pane{done, stale, work})
+	var order []string
+	for _, a := range agents {
+		order = append(order, strings.TrimPrefix(a.BlockID, "block:"))
+	}
+	if got := strings.Join(order, " "); got != "done2 work1 done1" {
+		t.Errorf("order %q, want the unseen done, then working, then the seen done", got)
+	}
+	if !agents[2].Seen || agents[0].Seen || agents[1].Seen {
+		t.Errorf("seen flags: %v %v %v", agents[0].Seen, agents[1].Seen, agents[2].Seen)
+	}
+	n := Counts(agents)
+	if n[Done] != 1 || n[Idle] != 1 || n[Working] != 1 {
+		t.Errorf("counts %v", n)
+	}
+}

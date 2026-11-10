@@ -53,6 +53,7 @@ type Agent struct {
 	CWD       string       `json:"cwd,omitempty"`
 	Since     *time.Time   `json:"since,omitempty"` // when the state was reported
 	Focused   bool         `json:"focused"`         // the focused pane of its session's visible tab
+	Seen      bool         `json:"seen"`            // done or error, and the user has looked since
 	Records   []rex.Record `json:"records"`
 }
 
@@ -65,6 +66,7 @@ type Pane struct {
 	Records            []rex.Record
 	Process            rex.Process
 	Title              string
+	Viewed             time.Time // when an app last showed the pane
 }
 
 // knownAgents are process names that are coding agents even before they
@@ -126,6 +128,9 @@ func (p *Pane) Agent() (Agent, bool) {
 		t := top.UpdatedAt
 		a.Since = &t
 		a.Title = top.Title
+		// Seen means what Cmd+U in next_ready.lua means: an app showed
+		// the pane after the report.
+		a.Seen = (a.State == Done || a.State == Error) && p.Viewed.After(t)
 	}
 	if a.App == "" {
 		a.App = "agent"
@@ -186,14 +191,23 @@ func (p *Pane) ApplyStatus(id string, rec *rex.Record) {
 
 // --- ordering -----------------------------------------------------------------
 
+// Urgency is the state that decides where an agent sorts and how loudly it
+// shows. A done or error the user has seen is no more urgent than idle.
+func (a Agent) Urgency() State {
+	if a.Seen {
+		return Idle
+	}
+	return a.State
+}
+
 // waitKey orders agents within a state: the one that has waited on the user
 // longest comes first, and among busy ones the most recently active.
 func less(a, b Agent) int {
-	if c := cmp.Compare(a.State.Rank(), b.State.Rank()); c != 0 {
+	if c := cmp.Compare(a.Urgency().Rank(), b.Urgency().Rank()); c != 0 {
 		return c
 	}
 	at, bt := since(a), since(b)
-	if a.State == Working || a.State == Idle {
+	if u := a.Urgency(); u == Working || u == Idle {
 		at, bt = bt, at
 	}
 	if c := at.Compare(bt); c != 0 {
@@ -238,11 +252,11 @@ func Groups(agents []Agent) []Group {
 	return out
 }
 
-// Counts tallies agents by state.
+// Counts tallies agents by urgency, so a seen done counts as idle.
 func Counts(agents []Agent) map[State]int {
 	n := map[State]int{}
 	for _, a := range agents {
-		n[a.State]++
+		n[a.Urgency()]++
 	}
 	return n
 }
@@ -315,6 +329,14 @@ func Scan(ctx context.Context, c *rex.Client) ([]*Pane, error) {
 			mu.Lock()
 			if err == nil {
 				p.Process = pr
+			}
+			mu.Unlock()
+		}))
+		wg.Go(run(func() {
+			t, err := c.Viewed(ctx, p.SessionID, p.BlockID)
+			mu.Lock()
+			if err == nil {
+				p.Viewed = t
 			}
 			mu.Unlock()
 		}))

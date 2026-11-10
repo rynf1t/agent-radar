@@ -363,7 +363,7 @@ func (c *canvas) row(f frame, a radar.Agent, y, w, alpha float64) {
 	right := w - padX
 	// Line 1: state mark, title, age.
 	cy := y + 15
-	switch a.State {
+	switch a.Urgency() {
 	case radar.Blocked:
 		c.circle(padX+glyphR+1, cy, glyphR, withAlpha(p.blocked, alpha))
 	case radar.Error:
@@ -385,7 +385,7 @@ func (c *canvas) row(f frame, a radar.Agent, y, w, alpha float64) {
 		c.circle(padX+glyphR+1, cy, 2.5, withAlpha(p.idle, alpha))
 	}
 	titleCol := p.fg
-	if a.State == radar.Idle {
+	if a.Urgency() == radar.Idle {
 		titleCol = p.body
 	}
 	age := radar.Ago(a.Since, f.now)
@@ -399,7 +399,7 @@ func (c *canvas) row(f frame, a radar.Agent, y, w, alpha float64) {
 
 	// Line 2: what it is doing or waiting for.
 	stateCol := p.body
-	switch a.State {
+	switch a.Urgency() {
 	case radar.Blocked:
 		stateCol = p.blockedText
 	case radar.Error:

@@ -214,6 +214,24 @@ func (c *Client) Title(ctx context.Context, sessionID, blockID string) (string, 
 	return out.Title, err
 }
 
+// Viewed is the last time an app showed the pane: the newest size a
+// client asked for. It is zero when no client ever has.
+func (c *Client) Viewed(ctx context.Context, sessionID, blockID string) (time.Time, error) {
+	var out struct {
+		Desired []struct {
+			UpdatedAt time.Time `json:"updated_at"`
+		} `json:"desired"`
+	}
+	err := c.BlockCall(ctx, sessionID, blockID, "size", &out)
+	var last time.Time
+	for _, d := range out.Desired {
+		if d.UpdatedAt.After(last) {
+			last = d.UpdatedAt
+		}
+	}
+	return last, err
+}
+
 // Focus focuses a block and makes its window active in its session.
 func (c *Client) Focus(ctx context.Context, sessionID, blockID string) error {
 	return c.Call(ctx, "session.focus_block", map[string]any{"session_id": sessionID, "block_id": blockID}, nil)

@@ -49,6 +49,25 @@ it prints the same pane ID instead of opening another.
 
 Clicking a row jumps there too.
 
+### One key from any session
+
+A radar pane lives in the session that opened it. To summon the radar from
+anywhere, add the Rex plugin in `rex/radar.lua`:
+
+```sh
+ln -s "$PWD/rex/radar.lua" ~/.config/rex/radar.lua
+```
+
+```lua
+-- in ~/.config/rex/init.lua
+local radar = dofile(os.getenv("HOME") .. "/.config/rex/radar.lua")
+radar.setup{ key = "cmd+shift+u" }
+```
+
+Then run `rex config reload`. Cmd+Shift+U floats the radar over whatever
+you're looking at. Enter jumps to an agent and closes it. Esc or Cmd+Shift+U
+closes it and puts focus back where it was.
+
 ## What it shows
 
 Agents are grouped by session. Sessions and agents are ordered by urgency,
@@ -58,7 +77,7 @@ then by how long they've waited.
 |---|---|---|
 | blocked | yellow dot | Waiting on you: a permission, a question or a login |
 | error | red dot | Failed and stopped |
-| done | blue dot | Finished, and you haven't looked yet |
+| done | blue dot | Finished, and you haven't looked yet. Once you have, it drops to the bottom with a grey dot. |
 | working | ring | Busy. The ring fills if the agent reports progress. |
 | idle | small grey dot | Waiting for its next instruction |
 
@@ -78,7 +97,7 @@ radar show [--split right|below] [--ratio PCT] [--theme auto|light|dark]
 radar hide
 radar ls [--json] [--state STATE]
 radar focus [TARGET]
-radar view
+radar view [--popup [--back BLOCK]]
 radar render -o FILE.png [--width PX] [--height PX] [--theme light|dark]
 radar demo STATE [--kind KIND] [--msg TEXT] | radar demo cycle
 radar skill install|show|remove [--dir DIR] [--dry-run] [--force]
@@ -103,9 +122,9 @@ ambiguous, 4 Rex unreachable, 130 interrupted.
 - **Jumping needs Remote Control.** radar focuses the pane in its session,
   then asks the Rex app to show that session. The second step needs Remote
   Control on in Rex Settings, under Rex Server. Without it the pane says so.
-- **done means unseen until the agent says otherwise.** Rex keeps a done
-  record until the program replaces it, so an agent you've already read stays
-  done until you give it new work.
+- **Seen means a Rex app showed the pane after it finished.** It's the same
+  test the community Cmd+U script uses. An agent finishing in a pane you're
+  already looking at stays unseen until the app shows that pane again.
 - **One machine.** radar reads the local Rex server. Agents on other hosts
   don't appear yet.
 - **Titles and folders refresh every 20 seconds.** Status changes arrive
@@ -145,5 +164,7 @@ radar demo blocked --kind question --msg "Ship it?"
   stored under `$XDG_STATE_HOME/agent-radar`, keyed on `REX_BLOCK`, behind a
   file lock.
 - The agent skill is `skills/radar/SKILL.md`, embedded in the binary.
+- `rex/radar.lua` is the Rex plugin for the Cmd+Shift+U float. It runs
+  `radar view --popup`.
 - Test with `go test ./...`. `radar render -o out.png` shows what the pane
   draws.

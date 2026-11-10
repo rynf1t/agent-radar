@@ -42,7 +42,11 @@ Usage:
   radar focus [TARGET]  focus an agent's pane in the Rex app. TARGET is a
                         position (1 is the most urgent), a session label or a
                         block ID suffix. Without one, the most urgent agent.
-  radar view            run the viewer in this terminal (what show runs)
+  radar view [--popup [--back BLOCK]]
+                        run the viewer in this terminal (what show runs).
+                        --popup closes on esc and after a jump, and focuses
+                        BLOCK again unless it jumped within this session.
+                        The Rex plugin's Cmd+Shift+U float runs this.
   radar render -o FILE.png [--width PX] [--height PX] [--theme light|dark]
                         draw the viewer to a PNG, to see what the pane shows
   radar skill install [--dir DIR] [--dry-run] [--force]
@@ -58,7 +62,7 @@ Exit codes: 0 ok, 1 failure, 2 bad command line, 3 target not found or
 ambiguous, 4 Rex unreachable, 130 interrupted.
 `
 
-var version = "0.1.0"
+var version = "0.2.0"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -285,6 +289,8 @@ func checkTheme(t string) error {
 func cmdView(ctx context.Context, args []string) error {
 	fs := newFlags("view")
 	theme := fs.String("theme", "auto", "")
+	popup := fs.Bool("popup", false, "")
+	back := fs.String("back", "", "")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
@@ -295,7 +301,7 @@ func cmdView(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	return view.Run(ctx, c, view.Options{Theme: *theme})
+	return view.Run(ctx, c, view.Options{Theme: *theme, Popup: *popup, Back: *back})
 }
 
 func cmdRender(ctx context.Context, args []string, stdout io.Writer) error {

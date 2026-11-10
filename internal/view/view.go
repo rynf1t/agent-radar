@@ -28,6 +28,8 @@ import (
 // Options configure the viewer.
 type Options struct {
 	Theme string // auto follows the terminal. light or dark pin a palette.
+	Popup bool   // a glance-and-go float: esc closes it, and so does a jump
+	Back  string // the block a popup focuses again on close, unless it jumped within its session
 }
 
 type winSize struct{ cols, rows, xpix, ypix int }
@@ -113,6 +115,21 @@ func Run(ctx context.Context, c *rex.Client, opt Options) (err error) {
 	}
 	defer restore() // deferred calls run while a panic unwinds too
 
+	// Rex picks some other pane when a float closes, so a popup hands focus
+	// back to the pane it was opened over, unless it jumped within its own
+	// session.
+	home := os.Getenv("REX_SESSION")
+	jumpedHome := false
+	if opt.Popup && opt.Back != "" {
+		defer func() {
+			if !jumpedHome {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				c.Focus(ctx, home, opt.Back)
+			}
+		}()
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	hup := make(chan os.Signal, 1)
@@ -140,6 +157,7 @@ func Run(ctx context.Context, c *rex.Client, opt Options) (err error) {
 	lv.run(ctx)
 
 	v := newViewer(opt)
+	v.focused = opt.Popup // a popup opens focused, before any focus report
 
 	// The first frame waits for the theme so it has the right colors. A new
 	// pane may not be attached yet, so termcolor.Wait asks again until it is.
@@ -218,7 +236,9 @@ func Run(ctx context.Context, c *rex.Client, opt Options) (err error) {
 	v.rebuild(time.Now())
 	redraw(time.Now())
 	lastSig := ""
+	var jumpTo radar.Agent
 	jump := func(a radar.Agent) {
+		jumpTo = a
 		go func() { focusDone <- Focus(ctx, c, a) }()
 	}
 	handle := func(i input) bool {
@@ -307,6 +327,10 @@ func Run(ctx context.Context, c *rex.Client, opt Options) (err error) {
 			v.rebuild(time.Now())
 			redraw(time.Now())
 		case err := <-focusDone:
+			if err == nil && opt.Popup {
+				jumpedHome = jumpTo.SessionID == home
+				return nil
+			}
 			if err != nil {
 				v.note = firstSentence(err.Error())
 				if strings.Contains(err.Error(), "Remote Control") {
@@ -346,7 +370,7 @@ func (v *viewer) signature(now time.Time) string {
 				prog += strconv.Itoa(*r.Progress) + ","
 			}
 		}
-		fmt.Fprint(&b, a.BlockID, a.SessionID, a.Session, a.State, a.Kind, a.Title, a.Msg, a.App, a.CWD,
+		fmt.Fprint(&b, a.BlockID, a.SessionID, a.Session, a.State, a.Seen, a.Kind, a.Title, a.Msg, a.App, a.CWD,
 			radar.Ago(a.Since, now), prog, "\x00")
 	}
 	return b.String()
@@ -534,8 +558,9 @@ func (v *viewer) key(i input, now time.Time) (quit, jump bool) {
 	case keyEscape:
 		if v.filter {
 			v.closeFilter(now)
+			return false, false
 		}
-		return
+		return v.opt.Popup, false
 	}
 	if v.typing {
 		switch {
@@ -666,6 +691,9 @@ func (v *viewer) frameAt(now time.Time) frame {
 		}
 	} else if v.focused {
 		f.hint = "↑↓ move    enter jump    / filter    q quit"
+		if v.opt.Popup {
+			f.hint = "↑↓ move    enter jump    / filter    esc close"
+		}
 	}
 	if v.scanned && !v.connected {
 		f.status, f.dim = "Can't reach Rex. Retrying…", true
